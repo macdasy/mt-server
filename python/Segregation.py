@@ -1,20 +1,20 @@
 import re
-import json
 import PDFGeneration
+from collections import defaultdict
+
+MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December' ]
+
 
 def find_float(obj):
     index = 0
     for key, value in obj.items():
         try:
             float_value = float(value.replace(',',''))
-            # print(float_value)
-            # print(isinstance(float_value, float))
 
             if isinstance(float_value, float):
                 return index
-        except ValueError:
-            # print('Haha!')
-            pass
+        except ValueError: pass
+
         index += 1
     return index
 
@@ -24,10 +24,18 @@ m_o_p = {}
 high_value_transaction = {
     'inflow': [],
     'outflow': []
- }
+}
+
 hvt_list = []
+grouped_transactions = {}
+final = []
+table_headings = []
 
 def segregate(data, threshold):
+
+    total_income = 0;
+    total_outcome = 0;
+
 
     new_list = []
     for input_dict in data:
@@ -37,30 +45,30 @@ def segregate(data, threshold):
     data = new_list
 
     for raw in data:
-
         num_index = find_float(raw)
         check_index = num_index + 1
-        # print(data)
-
-        # print(check_index)
-        # print(raw)
+       
         date = raw[list(raw.keys())[0]].split('\n')[0]
         desc = (raw.get('PARTICULARS') or raw.get('DESCRIPTION') or raw.get('NARRATION')).replace('\n', '')
         type = raw.get('TYPE') or ('CR' if len(raw) - 1 == check_index else ('DR' if raw[list(raw.keys())[check_index]] == '-' else 'CR'))
         type = 'DR' if type == 'Debit' else 'CR' if type == 'Credit' else type
         amount = ( raw.get('AMOUNT') or raw[list(raw.keys())[num_index]] ).replace(',','')
-        # print('\n')
 
         entry = {
-            'Date': date,
-            'Description': desc,
-            'amount': amount,
-            'type': type
+            'DATE': date,
+            'DESCRIPTION': desc,
+            'AMOUNT': amount,
+            'TYPE': type
         }
 
-        # print(entry)
-        result.append(entry)
+        if (len(date) > 1) and (len(desc) > 1) and (len(amount) > 1) and (len(type) > 1):
+            result.append(entry)
+
         temp_desc = desc.upper()
+
+        # Totals
+        if type == 'DR': total_income += float(amount)
+        if type =='CR': total_outcome += float(amount)
 
         if ('CHARGES' in temp_desc or 'CHG' in temp_desc or 'BG CHARGES' in temp_desc or 'CHRGS' in temp_desc
             or 'FEE' in temp_desc or 'MISC' in temp_desc or 'MISC-REMIT' in temp_desc or 'BULK' in temp_desc):
@@ -84,39 +92,203 @@ def segregate(data, threshold):
             m_o_p[mode].append(entry)
 
         # High Value Transaction
-        if float(amount) > int(threshold):
-            # print(entry)
-            # print(type+'\n\n')
+        if (float(amount) > float(threshold) ) and float(threshold) > 0 :
             if type == 'CR': high_value_transaction['inflow'].append(entry)
             elif type == 'DR': high_value_transaction['outflow'].append(entry)
 
             new_hvt = [ date, desc, amount if type == 'CR' else '-', amount if type == 'DR' else '-' ]
             hvt_list.append(new_hvt)
 
+    
+    # Unusual Transaction    
+    date = ''
+    decs = set()
+    amounts = set()
+    trans_type = ''
+    first_date_value = dict
+
+    unsual_list = []
+
+    for d in result:
+        current_date = d['DATE']
+        current_desc = d['DESCRIPTION']
+        current_amount = d['AMOUNT']
+        current_type = d['TYPE']
+
+        if current_date != date:
+            date = current_date
+            decs.add(current_desc)
+            amounts.add(current_amount)
+
+            trans_type = current_type
+            first_date_value = d # keeping the first value for adding it later => 
+
+        else:
+            
+            if (current_desc in decs and current_amount in amounts and current_type != trans_type):
+
+                # adding the first value after checking <=
+                if first_date_value not in unsual_list: 
+                    unsual_list.append(first_date_value)
+
+                # avoiding duplicate values.
+                if d not in unsual_list: unsual_list.append(d)
+                # final.append(d)
+
+            # checking for new payee under the same date
+            if current_desc not in decs or current_amount not in amounts:
+                decs.add(current_desc)
+                amounts.add(current_amount)
+                first_date_value = d
+
+            trans_type = current_type
+    
+
+    # Unusual Transactions
+    unusual_trans_list = [list(my_dict.values()) for my_dict in unsual_list]
+    unusual_header = ['Date', 'Decription', 'Amount', 'Type']
+    if len(unusual_trans_list) > 0 : 
+        unusual_trans_list.insert(0, unusual_header)
+        final.append(unusual_trans_list)
+        table_headings.append('Unusual Transactions')
+
+
+    # Bank Charges
     charge_list = [list(obj.values())[:-1] + ['Bank Charges'] for obj in charges]
     charge_header = ['Date', 'Decription', 'Amount', 'Type']
-    if len(charge_list) > 0 : charge_list.insert(0, charge_header)
+    if len(charge_list) > 0 :
+        charge_list.insert(0, charge_header)
+        final.append(charge_list)
+        table_headings.append('Bank Charges Analysis')
 
+
+    # Mode Of Payment
     mode_list = []
     for key, value in m_o_p.items():
-        d_imps = sum(float(obj['amount'].replace(',', '')) for obj in value if obj['type'] == 'DR' and float(obj['amount'].replace(',', '')) > 0)
-        c_imps = sum(float(obj['amount'].replace(',', '')) for obj in value if obj['type'] == 'CR' and float(obj['amount'].replace(',', '')) > 0)
+        d_imps = sum(float(obj['AMOUNT'].replace(',', '')) for obj in value if obj['TYPE'] == 'DR' and float(obj['AMOUNT'].replace(',', '')) > 0)
+        c_imps = sum(float(obj['AMOUNT'].replace(',', '')) for obj in value if obj['TYPE'] == 'CR' and float(obj['AMOUNT'].replace(',', '')) > 0)
         mode_list.append([key, str(len(value)), '{:.2f}'.format(d_imps), '{:.2f}'.format(c_imps)])
 
-    mode_header = ['Particular', 'Count', 'Amount INFLOW' , 'Amount OUTFLOE']
-    if len(mode_list) > 0 : mode_list.insert(0, mode_header)
+    mode_header = ['Particular', 'Count', 'Amount INFLOW' , 'Amount OUTFLOW']
+    if len(mode_list) > 0 : 
+        mode_list.insert(0, mode_header)
+        final.append(mode_list)
+        table_headings.append('UPI - MODE OF PAYMENT\n(STATUS COUNT)')
 
 
-    # final list
-    final = [charge_list, mode_list, hvt_list]
-    # PDFGeneration.create(final)
 
-# Example usage:
-# data = [
-    # {"DATE": "23/03/2023", "DESCRIPTION": "TO ONL UPI/DR/308248255168/KAVITHA /PYTM/PAYTMQR281/U::00607", "CHEQUE NO": null, "DEBIT": "30.00", "CREDIT": null, "BALANCE": "145.56"}, {"DATE": "22/03/2023", "DESCRIPTION": "TO ONL UPI/DR/308130535462/DHARANIS/UTIB/DHARANISH5/U::00607", "CHEQUE NO": null, "DEBIT": "40.00", "CREDIT": null, "BALANCE": "175.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "BY ONL UPI/CR/308098824819/NAVANEET/KARB/NAVANEETHA/U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "100.00", "BALANCE": "215.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "TO ONL UPI/DR/308005135653/NAVANEET/KARB/NAVANEETHA/O::00607", "CHEQUE NO": null, "DEBIT": "100.00", "CREDIT": null, "BALANCE": "115.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "BY ONL UPI/CR/308098720779/GOOGLEPA/UTIB/GOOG-PAYME/U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "5.00", "BALANCE": "215.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "TO ONL UPI/DR/308005072971/NAVANEET/KARB/NAVANEETHA/U::00607", "CHEQUE NO": null, "DEBIT": "200.00", "CREDIT": null, "BALANCE": "210.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "BY ONL UPI/CR/308098178922/VISWANAT/CNRB/SUGADEV070/U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "100.00", "BALANCE": "410.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "BY ONL UPI/CR/308098078771/NAVANEET/KARB/NAVANEETHA/U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "180.00", "BALANCE": "310.56"}, {"DATE": "21/03/2023", "DESCRIPTION": "TO ONL UPI/DR/308000564035/PARTHIBA/PYTM/PAYTMQR281/U::00607", "CHEQUE NO": null, "DEBIT": "10.00", "CREDIT": null, "BALANCE": "130.56"}, {"DATE": "16/03/2023", "DESCRIPTION": "TO ONL UPI/DR/307592555486/KEVIN KI/HDFC/KIRSTENBAB/U::00607", "CHEQUE NO": null, "DEBIT": "50.00", "CREDIT": null, "BALANCE": "140.56"}, {"DATE": "13/03/2023", "DESCRIPTION": "BY ONL UPI/CR/307244232618/MR S B K/CIUB/KRISHNA07 /U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "60.00", "BALANCE": "190.56"}, {"DATE": "13/03/2023", "DESCRIPTION": "TO ONL UPI/DR/307229568339/ABBAS M/PYTM/PAYTMQR281/UP::00607", "CHEQUE NO": null, "DEBIT": "140.00", "CREDIT": null, "BALANCE": "130.56"}, {"DATE": "12/03/2023", "DESCRIPTION": "TO ONL UPI/DR/307120562870/SURYAPRA/IOBA/VELUMANIAR/U::00607", "CHEQUE NO": null, "DEBIT": "1.00", "CREDIT": null, "BALANCE": "270.56"}, {"DATE": "12/03/2023", "DESCRIPTION": "TO ONL UPI/DR/307120551673/SURYAPRA/IOBA/VELUMANIAR/U::00607", "CHEQUE NO": null, "DEBIT": "1,079.00", "CREDIT": null, "BALANCE": "271.56"}, {"DATE": "12/03/2023", "DESCRIPTION": "BY ONL UPI/CR/307120344564/SURYAPRA/IOBA/VELUMANIAR/U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "1,080.00", "BALANCE": "1,350.56"}, {"DATE": "11/03/2023", "DESCRIPTION": "TO ONL UPI/DR/307094625500/MUTHUSAN/YESB/Q435352089/U::00607", "CHEQUE NO": null, "DEBIT": "40.00", "CREDIT": null, "BALANCE": "270.56"}, {"DATE": "11/03/2023", "DESCRIPTION": "BY ONL UPI/CR/307068867834/MR S B K/CIUB/KRISHNA07 /U::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "30.00", "BALANCE": "310.56"}, {"DATE": "10/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306965837728/M DHIREN/BARB/MDPNKL2004/U::00607", "CHEQUE NO": null, "DEBIT": "70.00", "CREDIT": null, "BALANCE": "280.56"}, {"DATE": "10/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306961091469/ABBAS M/PYTM/PAYTMQR281/UP::00607", "CHEQUE NO": null, "DEBIT": "140.00", "CREDIT": null, "BALANCE": "350.56"}, {"DATE": "09/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306846603856/SRI GANG/YESB/Q488710188/T::00607", "CHEQUE NO": null, "DEBIT": "54.00", "CREDIT": null, "BALANCE": "490.56"}, {"DATE": "09/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306837550664/MAHESWAR/KVBL/IAMKISHORE/U::00607", "CHEQUE NO": null, "DEBIT": "30.00", "CREDIT": null, "BALANCE": "544.56"}, {"DATE": "07/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306645568927/MS LAVAN/CIUB/LAVANYAAKB/U::00607", "CHEQUE NO": null, "DEBIT": "25.00", "CREDIT": null, "BALANCE": "574.56"}, {"DATE": "07/03/2023", "DESCRIPTION": "BY ONL UPI/CR/306605199218/MR J PRA/IDIB/PRASATH J1/B::00032", "CHEQUE NO": null, "DEBIT": null, "CREDIT": "100.00", "BALANCE": "599.56"}, {"DATE": "04/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306354299342/BILLDESK/ICIC/BILLDESK P/U::00607", "CHEQUE NO": null, "DEBIT": "15.00", "CREDIT": null, "BALANCE": "499.56"}, {"DATE": "03/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306236170398/EURONETG/ICIC/EURONETGPA/U::00607", "CHEQUE NO": null, "DEBIT": "15.00", "CREDIT": null, "BALANCE": "514.56"}, {"DATE": "02/03/2023", "DESCRIPTION": "TO ONL UPI/DR/306178163555/EURONETG/ICIC/EURONETGPA/U::00607", "CHEQUE NO": null, "DEBIT": "54.00", "CREDIT": null, "BALANCE": "529.56"}, {"DATE": "TOTAL", "DESCRIPTION": null, "CHEQUE NO": null, "DEBIT": "2,093.00", "CREDIT": "1,655.00", "BALANCE": "529.56"}]
+    # High Value Transaction
+    hvt_header = ['Date', 'Decription', 'Amount INFLOW' , 'Amount OUTFLOW']
+    if len(hvt_list) > 0 : 
+        hvt_list.insert(0, hvt_header)
+        final.append(hvt_list)
+        table_headings.append(f'High Value Transactions({threshold})')
 
-# result = segregate(data)
-# print(json.dumps(result, indent=2))
+
+    # Duplicate Transaction
+    seen = defaultdict(list)
+    duplicates = []
+
+    for my_dict in data:
+        frozenset_dict = frozenset(my_dict.items())
+
+        if frozenset_dict in seen:
+            duplicates.extend([seen[frozenset_dict], my_dict])
+        else:
+            seen[frozenset_dict] = my_dict
+    
+    dup_header = ['Date', 'Decription', 'Amount', 'Type']
+
+    if len(duplicates) > 0: 
+        duplicates.insert(0, dup_header)
+        final.append(duplicates)
+        table_headings.append(f'Duplicate Transactions')
+
+
+    # Attribute Classification & Month Wise Data
+
+    description_stats = {}
+    limit = 1
+    date_data = {}
+    graph_months = []
+    min_amount = 0
+    max_amount = 0
+    graph_dots = []
+
+    for my_dict in result:
+
+        # --------------- Attr. Classftn. --------------- #
+        description_value = my_dict['DESCRIPTION']
+        amount_value = float(my_dict['AMOUNT'].replace(',', ''))
+        transaction_type = my_dict['TYPE']
+
+        # Initialize count and sum if the 'Description' is not seen before
+        if description_value not in description_stats:
+            description_stats[description_value] = { 'Desc': description_value , 'DR': 0, 'CR': 0, 'count':0 }
+
+        # Update count and sum for the 'Description' and type
+        description_stats[description_value][ transaction_type ] += amount_value
+        description_stats[description_value]['count'] += 1
+
+
+        # --------------- Month Wise Data --------------- #
+        present_date = list(my_dict.values())[0]
+        
+        present_date = present_date.split(',') if ',' in present_date else present_date.split('-') if '-' in present_date else present_date.split('/')
+        # print(present_date)
+
+        if present_date[1].isnumeric():
+            date_key = MONTHS[int(present_date[1]) - 1 ][:3] + f" '{ present_date[-1][-2:] }"
+        else:
+            date_key = present_date[1] + f" '{ present_date[-1][-2:] }"
+
+        if date_key not in graph_months: graph_months.append(date_key)
+
+        if date_key not in date_data:
+            date_data[date_key] = { 'Month': date_key, 'DR': 0, 'CR':0 }
+
+        date_data[date_key][ transaction_type ] += amount_value
+
+        if min_amount != 0:
+            min_amount = amount_value if amount_value < min_amount else min_amount
+
+        max_amount = amount_value if amount_value > max_amount else max_amount
+
+        if my_dict['TYPE'] == 'Debit' : graph_dots.append( (0, amount_value) )
+        if my_dict['TYPE'] == 'Credit' : graph_dots.append( (amount_value, 0) )
+
+    attributes_list = [ list(my_dict.values())[:-1] for my_dict in description_stats.values() if my_dict['count'] > limit ]
+
+    # line_chart = [ graph_months, graph_dots, min_amount, max_amount ]
+
+    chart_data = []
+    if len(attributes_list) > 0:
+
+        attr_header = ['Description', 'Debit', 'Credit']
+        attributes_list.insert(0, attr_header)
+        final.append(attributes_list)
+        table_headings.append(f'Attribute Classification')
+
+
+        attr_outflow_list = [sublist[-2] for sublist in attributes_list ]
+        attr_inflow_list = [sublist[-1] for sublist in attributes_list ]
+
+        if(len(attr_outflow_list) > 0): chart_data.append(attr_outflow_list)
+        if(len(attr_inflow_list) > 0): chart_data.append(attr_inflow_list)
+
+
+    # PDF Generation
+    if len(final) > 0: PDFGeneration.create(
+            final, 
+            table_headings=table_headings,
+            chart_data=chart_data, 
+            total_income=total_income, 
+            total_outcome=total_outcome,
+            line_chart_data=[date_data, graph_months],
+            min_amount=min_amount, 
+            max_amount=max_amount
+        )
+
 
 if __name__ == "__main__":
     segregate()

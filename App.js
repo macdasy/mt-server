@@ -39,7 +39,6 @@ const upload =
         }})
 
 const pythonScript = 'python/script.py';
-let result = [];
 
 //Import PythonShell module.
 const {PythonShell} = require('python-shell');
@@ -51,9 +50,9 @@ app.post('/upload', upload.single('pdfFile'), (req, res) => {
     const filePath = req.file.path;
     const fileName = req.file.filename;
     const password = req.body.password;
-    const threshold = req.body.threshold;
+    const threshold = Number(req.body.threshold) > 0 ? req.body.threshold : 0;
     
-    console.log(threshold);
+    console.log( threshold );
     const args = [ filePath, password, fileName, threshold ]
 	// Here are the option object in which arguments can be passed for the python_test.js.
 
@@ -74,8 +73,24 @@ app.post('/upload', upload.single('pdfFile'), (req, res) => {
 
     // End the PythonShell instance
     pythonShell.end((err) => {
-        if (err)console.error('Python shell process ended with error:', err);
-        else console.log('Python shell process finished.');
+        if (err){ 
+            res.status(400).send('Some error! Try again Later!');
+            console.error('Python shell process ended with error:', err); 
+        }
+        else{ 
+            res.send('Success');
+            console.log('Python shell process finished.'); 
+        }
+        
+        try {
+            fs.unlinkSync( "decrypted_ "+ fileName +".pdf" );
+            console.log('File deleted successfully.');
+        } catch (err){ console.log('Error deleting the decryted file'); }
+
+        try {
+            fs.unlinkSync( "./pdfs/"+ fileName );
+            console.log('File deleted successfully.');
+        } catch (err){ console.error(err) }
     });
 
 });

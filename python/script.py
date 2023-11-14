@@ -4,7 +4,6 @@ import Segregation
 
 a = 0
 file = sys.argv[1]
-# password = str(sys.argv[2])
 password = '' if sys.argv[2] == 'null' else str(sys.argv[2])
 threshold = '' if sys.argv[4] == 'null' else str(sys.argv[4])
 
@@ -125,9 +124,6 @@ with pdfplumber.open(file) as pdf:
                 entry = trimmed
                 entry_dict['Date'] = entry[0]
                 entry_dict['Description'] = entry[1] + entry[-1] if len(entry) == 7 else entry[1]
-                # entry_dict['Refrence No.'] = entry[2]
-                # entry_dict['Val. Date'] = entry[3]
-                # entry_dict['Closing Balance'] = float(entry[5].replace(",", ""))
 
                 found = returnValue(entry[4], page_num)
                 pos = found[0]['x1']
@@ -139,40 +135,10 @@ with pdfplumber.open(file) as pdf:
 
                 entry_dict['Closing Balance'] = entry[5].replace(",", "")
 
-                # if pos == 548.187:
-                #     entry_dict['Withdrawal'] = '-'
-                #     entry_dict['Deposit'] = text.replace(",", "")
-
-                # elif pos == 470.235:
-                #     entry_dict['Withdrawal'] = text.replace(",", "")
-                #     entry_dict['Deposit'] = '-'
-
-
                 final.append(entry_dict.copy())
 
 if (json.dumps(final) == '[]'):
     final = with_breaker(file)
 
 print(Segregation.segregate(final, threshold))
-
-
-# if (json.dumps(final) != '[]'):
-#     final = json.dumps(final) 
-    # print(final)
-
-    # print([[v for v in d.values()] for d in final])
-    # table_data = [[v for v in d.values()] for d in final]
-
-# else:
-#     final = json.dumps(with_breaker(file))
-    # print(final)
-
-    # print([[v for v in d.values()] for d in with_breaker(file)])
-    # table_data = [[v for v in d.values()] for d in with_breaker(file)]
-
-# header = ['Date', 'Decription', 'Amount', 'Type']
-# table_data.insert(0, header)
-
-# print(table_data)
-# Segregation.Segregate(table_data)
-# os.remove(file)
+os.remove(file)
