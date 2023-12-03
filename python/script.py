@@ -1,12 +1,16 @@
-import pdfplumber, re, json, sys, PyPDF2
+import pdfplumber
+import re
+import sys
+import PyPDF2
 import os
 import Segregation
 
+
 a = 0
 file = sys.argv[1]
+bank = sys.argv[5]
 password = '' if sys.argv[2] == 'null' else str(sys.argv[2])
-threshold = '' if sys.argv[4] == 'null' else str(sys.argv[4])
-
+lang = 0 if sys.argv[4] == 'null' else int(sys.argv[4])
 
 pdf_reader = PyPDF2.PdfReader(open(file, "rb"))
 
@@ -24,11 +28,22 @@ if pdf_reader.is_encrypted:
 entry_dict = {}
 texts = []
 final = []
+invalid_running_bal = False
+invalid_running_bal_index = 0
 
 #  ----------- # ----------- With Breaker  ----------- #  ----------- #
+# {'text': 'ACH/AIEPM2049R-AY2020-21/CE20125793409', 'x0': 143.75667040000002, 'x1': 284.9339024, 'top': 360.6293499999999, 'doctop': 360.6293499999999, 'bottom': 367.3793499999999, 'upright': True, 'direction': 1},
+
+def extract_numbers(input_string):
+    check = re.sub(r'[^0-9.]', '', input_string) 
+    if check and len(check) > 0 and check[-1] is '.' :
+            return check[:-1]
+    
+    else:
+        return check
+
 
 def with_breaker(pdf_path):
-
     with pdfplumber.open(pdf_path) as pdf:
         tables = []
 
@@ -40,15 +55,53 @@ def with_breaker(pdf_path):
 
             tables.extend(table_data)
 
-        headers = tables[0]
+        headers = [ value.lower() for value in tables[0] ]
         table_data = []
+        print(headers)
+        
         for row in tables[1:]:
             row_dict = {}
             for col, val in enumerate(row):
                 if val == "":
                     row_dict[headers[col]] = None
+
                 else:
-                    row_dict[headers[col]] = val
+
+                    try:
+                        num = val
+                        if val != None and '.' in val : 
+                            num = float(val)
+                        
+                        row_dict[headers[col]] = str(num)
+
+                    except ValueError:
+                        pattern = re.compile(r'^\d+(\.\d*)?\n(?:[a-zA-Z]{0,2}|\d+)$')
+
+                        if bool(pattern.match(val)):
+
+                            if 'DR' in val:
+                                temp = ((val.split('\n')[0]).replace('.','')).replace(',', '')
+
+                                if temp.isnumeric():
+                                    temp = val.split('\n')[0]
+                                    row_dict[headers[col]] =  f"-{temp}"
+
+                                else:
+                                    row_dict[headers[col]] =  val.split('\n')[0]
+
+                            elif len(val.split('\n')) > 1 and bool(extract_numbers(val.split('\n')[0])) and bool(extract_numbers(val.split('\n')[1])):
+                                row_dict[headers[col]] =  ''.join( val.split('\n') )
+
+                            else:
+                                row_dict[headers[col]] =  val.split('\n')[0]
+                            
+
+                        else:
+                            if '\n' in val:
+                                row_dict[headers[col]] = ' '.join( val.split('\n') )
+                            else: 
+                                row_dict[headers[col]] = val
+
             table_data.append(row_dict)
 
         return table_data
@@ -57,88 +110,103 @@ def with_breaker(pdf_path):
 #  ----------- # ----------- Without Breaker  ----------- #  ----------- #
 
 
-def returnValue(value, p_no):  
-        global texts
-        
-        p = pdf.pages[p_no]
-        raw_text1 = p.extract_words()
-        rvalue = [item for item in raw_text1 if item.get('text') == value]
-
-        if(len(rvalue) > 1):
-            
-            if len(texts) == 0 and value not in texts:
-                texts.append(value)
-                
-            elif len(texts) != 0 and value in texts:
-                texts.append(value)
-
-            elif len(texts) !=0 and value not in texts:
-                texts = []
-                texts.append(value)
-
-            return [rvalue[len(texts)-1]]
-        
-        elif rvalue != []:
-                texts = []
-                return [item for item in raw_text1 if item.get('text') == value]
+from tabula.io import read_pdf
+import math
+from itertools import chain
 
 
-with pdfplumber.open(file) as pdf:
-    for page_num in range(len(pdf.pages)):
-        # print(page_num)
+def without_breaker(pdf_path):
+
+    global invalid_running_bal
+    global invalid_running_bal_index
+
+    df = read_pdf(pdf_path, pages='all')
+    raw_entries = {
+        'columns': [],
+        'data': []
+    }
+
+    for i in df:
+        raw_entries['columns'].append( (i.to_dict(orient='split', index=False))['columns'] )
+        raw_entries['data'].append( (i.to_dict(orient='split', index=False))['data'] )
     
-        page = pdf.pages[page_num]
-        text = page.extract_text()
-        raw_text = page.extract_words()
+    raw_entries['columns'] = raw_entries['columns'][1:]
 
-        new_line = re.compile(r"(\b\d{2}/\d{2}/\d{2}\b) ([a-zA-Z0-9\-@#*/.]+)\s+([a-zA-Z0-9]+)\s+(\b\d{2}/\d{2}/\d{2}\b) (?:(\s |[\d,]+\.\d{2})) ?(?:(\s |[\d,]+\.\d{2}))?\s([\d,]+\.\d{2})")
-        second_line = re.compile(r"([a-zA-Z0-9\-@#*/.]+)")
-        decimal = re.compile("[\d,]+\.\d{2}")
+    # combining all the lists into a single list
+    all_data = list(chain.from_iterable(sublist + [r'%break%'] for sublist in raw_entries['data']))
 
-        combined_text = ''
-        condition_met = False
-        line_num  = 0
+    closing_balance = []
 
-        for line in text.split('\n'):
+    current_data_index = 0
 
-            if not condition_met:
-                condition_met = new_line.match(line)
+    for index, d in enumerate(all_data):
 
-            if(condition_met):
-                if not (decimal.match(line.split(' ')[-1])):
-                        line_num+=1
-                        cod1 = bool(re.search(r"\s", line))
-                        if not cod1:
-                            combined_text += f' {line}'
-                
-                else:
-                        if new_line.match(line):
-                            combined_text += f'\n{line}'
+        # breaking after this occurs
+        if d[1] == "STATEMENT SUMMARY :-": break
+
+        # adding the first row to data if it's not a header (ex. Date, Desc, value)
+        if len(raw_entries['columns']) > 0 and d == r'%break%':
+
+            if ( '/' in raw_entries['columns'][0][0] ) or ( 'Unnamed' in raw_entries['columns'][0][0] ):
+                all_data[index] = raw_entries['columns'][0]
+                d = raw_entries['columns'][0]
+                raw_entries['columns'].pop(0)
+
+        # handling the broken description  
+        if ( type(d[0]) is float and math.isnan(float(d[0])) ) or ( type(d[0]) is str and 'Unnamed' in d[0] ):
+            final[current_data_index-1]['description'] = final[current_data_index-1]['description'] + str(d[1]) 
+        
+        else:
+            if '/' in d[0]:
+                # Unnamed: 0
+                if ':' in str(d[4]): d[4] =  float('nan')
+                if ':' in str(d[5]): d[5] =  float('nan')
+
+                amount = str(d[4]).replace(',', '') if not math.isnan(float( str(d[4]).replace(',', '') )) else str(d[5]).replace(',', '')
+                trans_type = 'DR' if not math.isnan(float( str(d[4]).replace(',', '') )) else 'CR'
+
+                new_entry = {
+                    'date': d[0],
+                    'description': d[1],
+                    'amount': amount,
+                    'type': trans_type,
+                }
+
+                closing_balance.append(d[-1])
+
+                if current_data_index != 0 and not invalid_running_bal_index:
                     
-        found = None
-        for line in combined_text.split('\n') :
-            trimmed = line.split(' ')[:7]
+                    prev_balance = float(closing_balance[0].replace(',', ''))
+                    curr_balance = float(d[-1].replace(',',''))
+                    amount = float(amount.replace(',',''))
 
-            if(len(trimmed) > 1):
-                
-                entry = trimmed
-                entry_dict['Date'] = entry[0]
-                entry_dict['Description'] = entry[1] + entry[-1] if len(entry) == 7 else entry[1]
+                    if type == 'DR':
+                        if curr_balance == prev_balance - amount:
+                            invalid_running_bal = True
+                            invalid_running_bal_index = current_data_index
 
-                found = returnValue(entry[4], page_num)
-                pos = found[0]['x1']
-                text = found[0]['text']
-                entry_dict['Amount'] = text.replace(",", "")
-                
-                if pos == 548.187: entry_dict['Type'] = 'CR'
-                elif pos == 470.235: entry_dict['Type'] = 'DR'
+                    if type == 'CR':
+                        if curr_balance == prev_balance + amount:
+                            invalid_running_bal = True
+                            invalid_running_bal_index = current_data_index
 
-                entry_dict['Closing Balance'] = entry[5].replace(",", "")
+                final.append(new_entry)
 
-                final.append(entry_dict.copy())
+                # keeping up for adding the broken desc
+                current_data_index = current_data_index + 1
+    
+    return final
 
-if (json.dumps(final) == '[]'):
+if bank == "HDFC":
+    final = without_breaker(file)
+    Segregation.segregate(final, lang, bank, invalid_running_bal_index, invalid_running_bal)
+
+else:
     final = with_breaker(file)
+    Segregation.segregate(final, lang, bank)
 
-print(Segregation.segregate(final, threshold))
+# final = with_breaker(file)
+
+# Segregation.segregate(final, lang, bank)
+
 os.remove(file)

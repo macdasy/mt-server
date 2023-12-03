@@ -48,12 +48,12 @@ app.post('/upload', upload.single('pdfFile'), (req, res) => {
     console.log('File Uploading started...');
     
     const filePath = req.file.path;
+    const bank = req.body.bank;
     const fileName = req.file.filename;
     const password = req.body.password;
-    const threshold = Number(req.body.threshold) > 0 ? req.body.threshold : 0;
+    const lang = req.body.language;
     
-    console.log( threshold );
-    const args = [ filePath, password, fileName, threshold ]
+    const args = [ filePath, password, fileName, lang, bank ]
 	// Here are the option object in which arguments can be passed for the python_test.js.
 
 	let options = {
@@ -90,7 +90,7 @@ app.post('/upload', upload.single('pdfFile'), (req, res) => {
         try {
             fs.unlinkSync( "./pdfs/"+ fileName );
             console.log('File deleted successfully.');
-        } catch (err){ console.error(err) }
+        } catch (err){ console.log('File Already Deleted.'); }
     });
 
 });
